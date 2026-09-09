@@ -5,7 +5,9 @@ import asyncio
 import pytest
 
 from app.market.cache import PriceCache
+from app.market.history import PriceHistoryBuffer
 from app.market.simulator import SimulatorDataSource
+from app.market.sinks import MarketSinks
 
 
 @pytest.mark.asyncio
@@ -15,7 +17,8 @@ class TestSimulatorDataSource:
     async def test_start_populates_cache(self):
         """Test that start() immediately populates the cache."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.1)
         await source.start(["AAPL", "GOOGL"])
 
         # Cache should have seed prices immediately (before first loop tick)
@@ -27,7 +30,8 @@ class TestSimulatorDataSource:
     async def test_prices_update_over_time(self):
         """Test that prices are updated periodically."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.05)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.05)
         await source.start(["AAPL"])
 
         initial_version = cache.version
@@ -41,7 +45,8 @@ class TestSimulatorDataSource:
     async def test_stop_is_clean(self):
         """Test that stop() is clean and idempotent."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.1)
         await source.start(["AAPL"])
         await source.stop()
         # Double stop should not raise
@@ -50,7 +55,8 @@ class TestSimulatorDataSource:
     async def test_add_ticker(self):
         """Test adding a ticker dynamically."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.1)
         await source.start(["AAPL"])
 
         await source.add_ticker("TSLA")
@@ -62,7 +68,8 @@ class TestSimulatorDataSource:
     async def test_remove_ticker(self):
         """Test removing a ticker."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.1)
         await source.start(["AAPL", "TSLA"])
 
         await source.remove_ticker("TSLA")
@@ -74,7 +81,8 @@ class TestSimulatorDataSource:
     async def test_get_tickers(self):
         """Test getting the list of active tickers."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.1)
         await source.start(["AAPL", "GOOGL"])
 
         tickers = source.get_tickers()
@@ -85,7 +93,8 @@ class TestSimulatorDataSource:
     async def test_empty_start(self):
         """Test starting with no tickers."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.1)
         await source.start([])
 
         assert len(cache) == 0
@@ -96,7 +105,8 @@ class TestSimulatorDataSource:
     async def test_exception_resilience(self):
         """Test that simulator continues running after errors."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.05)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.05)
 
         # Start with a valid ticker
         await source.start(["AAPL"])
@@ -113,7 +123,8 @@ class TestSimulatorDataSource:
     async def test_custom_update_interval(self):
         """Test using a custom update interval."""
         cache = PriceCache()
-        source = SimulatorDataSource(price_cache=cache, update_interval=0.01)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = SimulatorDataSource(sinks=sinks, update_interval=0.01)
         await source.start(["AAPL"])
 
         initial_version = cache.version
@@ -127,9 +138,10 @@ class TestSimulatorDataSource:
     async def test_custom_event_probability(self):
         """Test creating source with custom event probability."""
         cache = PriceCache()
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
         # Very high event probability for testing
         source = SimulatorDataSource(
-            price_cache=cache, update_interval=0.1, event_probability=1.0
+            sinks=sinks, update_interval=0.1, event_probability=1.0
         )
         await source.start(["AAPL"])
 

@@ -20,8 +20,10 @@ from rich.table import Table
 from rich.text import Text
 
 from app.market.cache import PriceCache
+from app.market.history import PriceHistoryBuffer
 from app.market.seed_prices import SEED_PRICES
 from app.market.simulator import SimulatorDataSource
+from app.market.sinks import MarketSinks
 
 # Sparkline characters, low to high
 SPARK_CHARS = "▁▂▃▄▅▆▇█"
@@ -179,12 +181,12 @@ def print_summary(cache: PriceCache) -> None:
     table.add_column("Session Change", justify="right", width=14)
 
     for ticker in TICKERS:
-        seed = SEED_PRICES.get(ticker, 0)
         update = cache.get(ticker)
         if update is None:
             continue
+        seed = update.day_open or SEED_PRICES.get(ticker, 0)
         final = update.price
-        session_change = ((final - seed) / seed) * 100 if seed else 0
+        session_change = update.day_change_percent
 
         if session_change > 0:
             color = "green"
@@ -207,7 +209,8 @@ def print_summary(cache: PriceCache) -> None:
 async def run() -> None:
     """Main demo loop."""
     cache = PriceCache()
-    source = SimulatorDataSource(price_cache=cache, update_interval=0.5)
+    sinks = MarketSinks(cache, PriceHistoryBuffer())
+    source = SimulatorDataSource(sinks=sinks, update_interval=0.5)
 
     # Per-ticker price history for sparklines
     history: dict[str, deque] = {t: deque(maxlen=40) for t in TICKERS}

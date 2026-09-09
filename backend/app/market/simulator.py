@@ -9,7 +9,6 @@ import random
 
 import numpy as np
 
-from .cache import PriceCache
 from .interface import MarketDataSource
 from .seed_prices import (
     CORRELATION_GROUPS,
@@ -21,6 +20,7 @@ from .seed_prices import (
     TICKER_PARAMS,
     TSLA_CORR,
 )
+from .sinks import MarketSinks
 
 logger = logging.getLogger(__name__)
 
@@ -201,16 +201,16 @@ class SimulatorDataSource(MarketDataSource):
     """MarketDataSource backed by the GBM simulator.
 
     Runs a background asyncio task that calls GBMSimulator.step() every
-    `update_interval` seconds and writes results to the PriceCache.
+    `update_interval` seconds and writes results into the shared sinks.
     """
 
     def __init__(
         self,
-        price_cache: PriceCache,
+        sinks: MarketSinks,
         update_interval: float = 0.5,
         event_probability: float = 0.001,
     ) -> None:
-        self._cache = price_cache
+        self._sinks = sinks
         self._interval = update_interval
         self._event_prob = event_probability
         self._sim: GBMSimulator | None = None
@@ -221,11 +221,13 @@ class SimulatorDataSource(MarketDataSource):
             tickers=tickers,
             event_probability=self._event_prob,
         )
-        # Seed the cache with initial prices so SSE has data immediately
+        # Seed both sinks immediately so SSE/history have data before the first tick.
+        # The seed price doubles as the day-open reference for the life of the process.
         for ticker in tickers:
             price = self._sim.get_price(ticker)
             if price is not None:
-                self._cache.update(ticker=ticker, price=price)
+                self._sinks.cache.set_day_open(ticker, price)
+                self._sinks.record(ticker=ticker, price=price)
         self._task = asyncio.create_task(self._run_loop(), name="simulator-loop")
         logger.info("Simulator started with %d tickers", len(tickers))
 
@@ -242,29 +244,34 @@ class SimulatorDataSource(MarketDataSource):
     async def add_ticker(self, ticker: str) -> None:
         if self._sim:
             self._sim.add_ticker(ticker)
-            # Seed cache immediately so the ticker has a price right away
+            # Seed immediately so the ticker has a price right away
             price = self._sim.get_price(ticker)
             if price is not None:
-                self._cache.update(ticker=ticker, price=price)
+                self._sinks.cache.set_day_open(ticker, price)
+                self._sinks.record(ticker=ticker, price=price)
             logger.info("Simulator: added ticker %s", ticker)
 
     async def remove_ticker(self, ticker: str) -> None:
         if self._sim:
             self._sim.remove_ticker(ticker)
-        self._cache.remove(ticker)
+        self._sinks.remove(ticker)
         logger.info("Simulator: removed ticker %s", ticker)
 
     def get_tickers(self) -> list[str]:
         return self._sim.get_tickers() if self._sim else []
 
     async def _run_loop(self) -> None:
-        """Core loop: step the simulation, write to cache, sleep."""
+        """Core loop: step the simulation, write to the sinks, sleep.
+
+        The broad except is deliberate: one bad tick must never kill the
+        background task — a dead price feed is far worse than a skipped tick.
+        """
         while True:
             try:
                 if self._sim:
                     prices = self._sim.step()
                     for ticker, price in prices.items():
-                        self._cache.update(ticker=ticker, price=price)
+                        self._sinks.record(ticker=ticker, price=price)
             except Exception:
                 logger.exception("Simulator step failed")
             await asyncio.sleep(self._interval)

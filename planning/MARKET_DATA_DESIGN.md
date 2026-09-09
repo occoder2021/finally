@@ -2,7 +2,26 @@
 
 ## Status
 
-The core of this design is **already implemented** in `backend/app/market/` (unified interface, GBM simulator, Massive/Polygon.io client, thread-safe cache, SSE endpoint). This document is the detailed design reference for that subsystem, and additionally specifies the **price history buffer** and the exact **SSE event shape** required by `planning/PLAN.md` §6/§8, which are not yet implemented. Anyone extending or reviewing the market data code should treat this document as the contract.
+**This design is fully implemented** in `backend/app/market/`. Anyone extending or reviewing the market data code should treat this document as the contract.
+
+The previously-outstanding items are now done:
+
+| Item | Where |
+|---|---|
+| `day_open` on `PriceUpdate`, and the PLAN.md §6 wire keys (`prev_price`, `change_pct`) | `models.py` |
+| Day-open reference tracked and preserved for the process lifetime | `cache.py` (`set_day_open` / `get_day_open`) |
+| `PriceHistoryBuffer` — bounded per-ticker series | `history.py` |
+| `MarketSinks` — one write call feeding both sinks | `sinks.py` |
+| Both data sources writing through the sinks | `simulator.py`, `massive_client.py` |
+| `GET /api/prices/{ticker}/history` | `prices_route.py` |
+| Application wiring and lifespan | `app/main.py` |
+
+Two deviations from the illustrative code below, both deliberate:
+
+1. The history route lives at `app/market/prices_route.py`, not `app/routes/prices.py`, to sit beside the SSE router (`stream.py`) that already lives in the market package. Both are exported from `app.market`.
+2. `create_stream_router()` builds its `APIRouter` inside the factory rather than at module scope, so repeated calls cannot stack duplicate routes onto a shared router.
+
+The watchlist ∪ positions union (§9.1) is a **routes-layer** responsibility and still awaits the database layer. `app.main.initial_tickers()` currently returns the default watchlist and is the single call site to replace when that lands; the market package already supports it via `add_ticker`/`remove_ticker`.
 
 ---
 
@@ -118,7 +137,7 @@ class PriceUpdate:
         }
 ```
 
-> **Design note:** the currently-implemented `PriceUpdate` (in the repo today) omits `day_open` and exposes only tick-over-tick `change_percent`, and `to_dict()` uses the keys `previous_price` / `change_percent` rather than PLAN.md's `prev_price` / `change_pct`. The version above is the target shape — it adds `day_open` as a required field (populated from `seed_prices.SEED_PRICES` for the simulator, and from the prior trading day's close for Massive) and renames the wire keys to match the PLAN.md §6 contract exactly: `ticker, price, prev_price, day_open, change_pct, timestamp, direction`. This is the one breaking change needed to close the gap between the current code and the spec; everything else in this document is additive.
+> **Design note (applied):** the original `PriceUpdate` omitted `day_open` and exposed only tick-over-tick `change_percent`, and `to_dict()` used the keys `previous_price` / `change_percent` rather than PLAN.md's `prev_price` / `change_pct`. The version above is now the shipped shape — it adds `day_open` as a required field (populated from `seed_prices.SEED_PRICES` for the simulator, and from the prior trading day's close for Massive) and renames the wire keys to match the PLAN.md §6 contract exactly: `ticker, price, prev_price, day_open, change_pct, timestamp, direction`. This was the one breaking change needed to close the gap between the code and the spec; everything else in this document was additive. Callers constructing a `PriceUpdate` directly must now pass `day_open`.
 
 ---
 
@@ -280,7 +299,7 @@ class PriceCache:
 
 A plain `threading.Lock` (not `asyncio.Lock`) is correct here: writes happen from the asyncio event loop (simulator tick, or the Massive poll callback after `asyncio.to_thread`), and reads can happen from sync contexts too (e.g., trade-execution validation called from a request handler). The critical sections are microseconds-long dict operations, so a blocking lock never stalls the event loop meaningfully.
 
-### 5.2 `PriceHistoryBuffer` — recent history per ticker (new)
+### 5.2 `PriceHistoryBuffer` — recent history per ticker
 
 `backend/app/market/history.py`
 
@@ -749,9 +768,9 @@ The market-data source itself (`source.get_tickers()`) is kept in sync with this
 
 ---
 
-## 10. Price History Endpoint (new)
+## 10. Price History Endpoint
 
-`backend/app/routes/prices.py` (illustrative — thin route, all logic lives in `PriceHistoryBuffer`)
+`backend/app/market/prices_route.py` — thin route, all logic lives in `PriceHistoryBuffer`.
 
 ```python
 from fastapi import APIRouter, HTTPException
@@ -823,7 +842,7 @@ Already implemented (`backend/tests/market/`):
 | `create_market_data_source` | env var present/absent/empty-string selects the right class |
 | `MassiveDataSource` | snapshot parsing (happy path + malformed snapshot skip-and-continue), 401/429/network failures don't kill the poll loop, thread offload for the sync client |
 
-To add for the new pieces in this document:
+Added for the pieces specified in this document (127 tests pass in total):
 
 - **`PriceHistoryBuffer`**: append respects `maxlen` (oldest points evicted first), `get()` on an unknown ticker returns `[]` not an error, thread-safety under concurrent `append`/`get`.
 - **`MarketSinks`**: one `record()` call updates both the cache and the history buffer consistently (same price, same timestamp) — regression test against the two sinks drifting.

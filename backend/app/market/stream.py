@@ -14,14 +14,15 @@ from .cache import PriceCache
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/stream", tags=["streaming"])
-
 
 def create_stream_router(price_cache: PriceCache) -> APIRouter:
     """Create the SSE streaming router with a reference to the price cache.
 
-    This factory pattern lets us inject the PriceCache without globals.
+    This factory pattern lets us inject the PriceCache without globals. The
+    router is built per call so repeated calls (e.g. in tests) never stack
+    duplicate routes onto a shared module-level router.
     """
+    router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
     @router.get("/prices")
     async def stream_prices(request: Request) -> StreamingResponse:
@@ -32,8 +33,12 @@ def create_stream_router(price_cache: PriceCache) -> APIRouter:
 
             data: {"AAPL": {"ticker": "AAPL", "price": 190.50, ...}, ...}
 
-        Includes a retry directive so the browser auto-reconnects on
-        disconnection (EventSource built-in behavior).
+        Each value is shaped per PriceUpdate.to_dict():
+        ticker, price, prev_price, day_open, change_pct, timestamp, direction.
+
+        The full cache is pushed immediately on connect — including on
+        automatic reconnection — so a client never waits for the next tick
+        to render prices.
         """
         return StreamingResponse(
             _generate_events(price_cache, request),
@@ -55,8 +60,9 @@ async def _generate_events(
 ) -> AsyncGenerator[str, None]:
     """Async generator that yields SSE-formatted price events.
 
-    Sends all prices every `interval` seconds. Stops when the client
-    disconnects (detected via request.is_disconnected()).
+    Sends the full cache snapshot on connect, then pushes again whenever the
+    cache version changes. Stops when the client disconnects (detected via
+    request.is_disconnected()).
     """
     # Tell the client to retry after 1 second if the connection drops
     yield "retry: 1000\n\n"
@@ -72,6 +78,9 @@ async def _generate_events(
                 logger.info("SSE client disconnected: %s", client_ip)
                 break
 
+            # The version check is what makes the 500ms poll cheap: between
+            # Massive polls (15s) nothing changes, so we compare an int and
+            # sleep rather than re-serializing an identical payload.
             current_version = price_cache.version
             if current_version != last_version:
                 last_version = current_version

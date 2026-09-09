@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.market.cache import PriceCache
+from app.market.history import PriceHistoryBuffer
 from app.market.massive_client import MassiveDataSource
+from app.market.sinks import MarketSinks
 
 
 def _make_snapshot(ticker: str, price: float, timestamp_ms: int) -> MagicMock:
@@ -25,9 +27,10 @@ class TestMassiveDataSource:
     async def test_poll_updates_cache(self):
         """Test that polling updates the cache."""
         cache = PriceCache()
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
         source = MassiveDataSource(
             api_key="test-key",
-            price_cache=cache,
+            sinks=sinks,
             poll_interval=60.0,  # Long interval so the loop doesn't auto-poll
         )
         source._tickers = ["AAPL", "GOOGL"]
@@ -47,9 +50,10 @@ class TestMassiveDataSource:
     async def test_malformed_snapshot_skipped(self):
         """Test that malformed snapshots are skipped gracefully."""
         cache = PriceCache()
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
         source = MassiveDataSource(
             api_key="test-key",
-            price_cache=cache,
+            sinks=sinks,
             poll_interval=60.0,
         )
         source._tickers = ["AAPL", "BAD"]
@@ -70,9 +74,10 @@ class TestMassiveDataSource:
     async def test_api_error_does_not_crash(self):
         """Test that API errors don't crash the poller."""
         cache = PriceCache()
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
         source = MassiveDataSource(
             api_key="test-key",
-            price_cache=cache,
+            sinks=sinks,
             poll_interval=60.0,
         )
         source._tickers = ["AAPL"]
@@ -86,9 +91,10 @@ class TestMassiveDataSource:
     async def test_timestamp_conversion(self):
         """Test that timestamps are converted from milliseconds to seconds."""
         cache = PriceCache()
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
         source = MassiveDataSource(
             api_key="test-key",
-            price_cache=cache,
+            sinks=sinks,
             poll_interval=60.0,
         )
         source._tickers = ["AAPL"]
@@ -106,7 +112,8 @@ class TestMassiveDataSource:
     async def test_add_ticker(self):
         """Test adding a ticker."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
 
         await source.add_ticker("AAPL")
         assert "AAPL" in source.get_tickers()
@@ -114,7 +121,8 @@ class TestMassiveDataSource:
     async def test_add_ticker_uppercase_normalization(self):
         """Test that tickers are normalized to uppercase."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
 
         await source.add_ticker("aapl")
         assert "AAPL" in source.get_tickers()
@@ -122,7 +130,8 @@ class TestMassiveDataSource:
     async def test_add_ticker_strips_whitespace(self):
         """Test that ticker whitespace is stripped."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
 
         await source.add_ticker("  AAPL  ")
         assert "AAPL" in source.get_tickers()
@@ -130,7 +139,8 @@ class TestMassiveDataSource:
     async def test_remove_ticker(self):
         """Test removing a ticker."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
         source._tickers = ["AAPL", "GOOGL"]
         cache.update("AAPL", 190.00)
 
@@ -141,7 +151,8 @@ class TestMassiveDataSource:
     async def test_get_tickers(self):
         """Test getting the list of active tickers."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
         source._tickers = ["AAPL", "GOOGL"]
 
         tickers = source.get_tickers()
@@ -150,7 +161,8 @@ class TestMassiveDataSource:
     async def test_empty_tickers_skips_poll(self):
         """Test that polling is skipped when there are no tickers."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
         source._tickers = []
 
         # Should not call _fetch_snapshots
@@ -161,7 +173,8 @@ class TestMassiveDataSource:
     async def test_stop_is_idempotent(self):
         """Test that stop() can be called multiple times."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks)
 
         await source.stop()
         await source.stop()  # Should not raise
@@ -169,7 +182,8 @@ class TestMassiveDataSource:
     async def test_stop_cancels_task(self):
         """Test that stop() cancels the polling task."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache, poll_interval=10.0)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks, poll_interval=10.0)
 
         # Mock the client and start
         with patch("app.market.massive_client.RESTClient"):
@@ -187,7 +201,8 @@ class TestMassiveDataSource:
     async def test_start_immediate_poll(self):
         """Test that start() does an immediate poll before starting the loop."""
         cache = PriceCache()
-        source = MassiveDataSource(api_key="test-key", price_cache=cache, poll_interval=60.0)
+        sinks = MarketSinks(cache, PriceHistoryBuffer())
+        source = MassiveDataSource(api_key="test-key", sinks=sinks, poll_interval=60.0)
 
         mock_snapshots = [_make_snapshot("AAPL", 190.50, 1707580800000)]
 
