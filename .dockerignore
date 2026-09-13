@@ -1,0 +1,34 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Backend — never bake a dev venv or test/lint caches into the image; uv
+# rebuilds the venv from pyproject.toml/uv.lock during the build.
+backend/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+backend/.coverage
+backend/htmlcov
+
+# Frontend — node_modules is reinstalled in the build stage; out/.next are
+# local build artifacts that must not shadow the in-container build.
+**/node_modules
+frontend/out
+frontend/.next
+
+# Database — never ship a local SQLite file inside the image; the container
+# writes its own into the mounted volume at /app/db.
+db/
+
+# Not needed at build time
+test/
+planning/
+.claude/
+
+# Local env files (secrets) — only .env.example is meant to travel anywhere,
+# and it isn't referenced by the Dockerfile anyway.
+.env
+.env.*
+!.env.example

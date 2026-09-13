@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  border-color: theme("colors.line.DEFAULT");
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: theme("colors.base.plane");
+  color: theme("colors.ink.primary");
+}
+
+::selection {
+  background-color: theme("colors.blue.DEFAULT" / 35%);
+}
+
+/* Slim, unobtrusive scrollbars for the dense panels. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.line.DEFAULT") transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background-color: theme("colors.line.DEFAULT");
+  border-radius: 4px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

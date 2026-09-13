@@ -1,0 +1,44 @@
+# Single source of truth for how FinAlly is launched: port mapping, the
+# persistent data volume, and environment configuration all live here. The
+# start/stop scripts in scripts/ are thin wrappers around `docker compose`
+# and must not duplicate any of this.
+services:
+  finally:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finally:latest
+    ports:
+      # Parameterized so an isolated run (e.g. the E2E suite, launched under
+      # `docker compose -p finally-e2e up`) can bind a different host port
+      # instead of colliding with a dev instance already on 8000.
+      - "${FINALLY_PORT:-8000}:8000"
+    volumes:
+      # Named volume — Docker manages the SQLite file's storage; it does not
+      # live in the repository. See planning/PLAN.md §11 and §14.7.
+      - finally-data:/app/db
+    env_file:
+      - .env
+    environment:
+      # env_file values win over the invoking shell's environment, so the one
+      # value a test harness needs to force is re-declared here to
+      # interpolate from the shell instead, falling back to .env/default for
+      # a normal launch. Secrets (OPENROUTER_API_KEY, MASSIVE_API_KEY) stay
+      # in .env only — never overridden here.
+      LLM_MOCK: ${LLM_MOCK:-false}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  finally-data:
+    # Explicit but parameterized: normal launches get exactly `finally-data`
+    # as documented in PLAN.md §11/§14.7 (so `docker volume rm finally-data`
+    # matches what a user was told), while an isolated run — e.g. the E2E
+    # harness under `docker compose -p finally-e2e up` — sets FINALLY_VOLUME
+    # to a distinct name so its `down -v` can never touch the real one.
+    name: ${FINALLY_VOLUME:-finally-data}
